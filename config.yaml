@@ -1,0 +1,42 @@
+model:
+  name: "Qwen/Qwen3-4B"
+  dtype: "bfloat16"
+  device: "cuda"
+
+emotions:
+  - desperate
+  - calm
+  - sad
+  - happy
+  - nervous
+  - angry
+  - afraid
+  - guilty
+  - surprised
+  - loving
+  - inspired
+  - proud
+
+story_generation:
+  stories_per_emotion: 50
+  min_words: 80
+  max_words: 150
+  min_tokens: 80      # measured with Qwen3 tokenizer; samples below this are skipped
+  max_tokens: 250
+
+neutral_generation:
+  n_neutral_texts: 200
+  min_words: 80
+  max_words: 150
+
+extraction:
+  skip_first_n_tokens: 50   # per paper: emotion content becomes clear after this point
+  layer: 20                 # probing layer for Qwen3-4B (36 layers total, biased toward later)
+
+noise_removal:
+  enabled: true             # enabled by default in Phase 1
+  variance_explained: 0.50  # cumulative variance ratio of PCs to remove
+
+reasoning:
+  max_new_tokens: 512
+  temperature: 0.7
