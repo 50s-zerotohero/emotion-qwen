@@ -1,0 +1,12 @@
+.env
+.env.local
+__pycache__/
+*.py[cod]
+.venv/
+data/activations/*.pt
+data/emotion_vectors.pt
+*.log
+.ipynb_checkpoints/
+gradio_cached_examples/
+flagged/
+.DS_Store
