@@ -1,12 +1,36 @@
+# Environment variables - NEVER COMMIT
 .env
 .env.local
+.env.*.local
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 .venv/
+venv/
+env/
+
+# Model checkpoints and data
 data/activations/*.pt
 data/emotion_vectors.pt
-*.log
+*.ckpt
+
+# Jupyter
 .ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Gradio
 gradio_cached_examples/
 flagged/
-.DS_Store
