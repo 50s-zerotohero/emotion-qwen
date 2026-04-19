@@ -166,21 +166,27 @@ class LocalNNSightBackend(EmotionProbeBackend):
                 if len(marker_buffer) > 80:
                     marker_buffer = marker_buffer[-40:]
 
-                if section == "think" and _THINK_END in marker_buffer:
+                if section == "response" and mode == ReasoningMode.THINK:
+                    # THINK mode: model may emit <think> before thinking content
+                    if "<think>" in marker_buffer:
+                        section = "think"
+                        marker_buffer = ""
+                elif section == "think" and _THINK_END in marker_buffer:
                     section = "response"
                     marker_buffer = ""
                 elif section == "scratchpad" and _SCRATCHPAD_END in marker_buffer:
                     section = "response"
                     marker_buffer = ""
 
-                yield TokenWithEmotions(token=token_str, section=section, emotions=scores)
-
-                # --- append token and check stop ---
-                next_tensor = torch.tensor([[next_id]], device="cuda")
-                input_ids   = torch.cat([input_ids, next_tensor], dim=1)
-
+                # --- stop on EOS without yielding the EOS token itself ---
                 if next_id == eos_id:
                     break
+
+                yield TokenWithEmotions(token=token_str, section=section, emotions=scores)
+
+                # --- append token and continue ---
+                next_tensor = torch.tensor([[next_id]], device="cuda")
+                input_ids   = torch.cat([input_ids, next_tensor], dim=1)
 
                 # yield control to event loop between tokens
                 await asyncio.sleep(0)
