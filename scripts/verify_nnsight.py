@@ -101,12 +101,37 @@ else:
 print("    OK (no crash)\n")
 
 # --------------------------------------------------------------------------- #
+# 6. Verify lm_head access path and logit shape
+# --------------------------------------------------------------------------- #
+print("[6] Verifying lm_head access path...")
+print(f"    Top-level lm structure:\n{lm}")
+
+with lm.trace(input_ids.to("cuda"), remote=False):
+    hidden_save2 = lm.model.layers[LAYER_IDX].output[0].save()
+    logit_save   = lm.lm_head.output.save()
+
+hidden2 = hidden_save2 if isinstance(hidden_save2, torch.Tensor) else hidden_save2.value
+logits  = logit_save   if isinstance(logit_save,   torch.Tensor) else logit_save.value
+print(f"    lm.lm_head.output.shape = {logits.shape}")
+# lm_head retains batch dim: (1, seq_len, vocab_size)
+# layers[i].output[0] squeezes it: (seq_len, hidden_dim)
+if logits.ndim == 3:
+    logits = logits[0]  # → (seq_len, vocab_size)
+assert logits.ndim == 2, f"Unexpected logit shape: {logits.shape}"
+next_token_id = int(logits[-1, :].argmax())
+next_token_str = tokenizer.decode([next_token_id])
+print(f"    logits[0].shape = {logits.shape}  (batch squeezed)")
+print(f"    argmax next token: id={next_token_id}, str={repr(next_token_str)}")
+print("    OK\n")
+
+# --------------------------------------------------------------------------- #
 # Summary
 # --------------------------------------------------------------------------- #
 print("=" * 50)
 print("All checks passed.")
 print(f"  Layer access path : lm.model.layers[{LAYER_IDX}].output[0]")
+print(f"  lm_head path      : lm.lm_head.output")
 print(f"  hidden_dim        : {hidden_dim}")
-print(f"  VRAM after load   :", end=" ")
-print(f"{torch.cuda.memory_allocated() / 1e9:.2f} GB allocated")
+print(f"  vocab_size        : {logits.shape[1]}")
+print(f"  VRAM after load   : {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated")
 print("=" * 50)
