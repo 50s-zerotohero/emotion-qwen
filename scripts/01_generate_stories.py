@@ -1,8 +1,13 @@
 """
 Script: 01_generate_stories.py
 
-Generate emotion stories (12 emotions × 50 = 600) and neutral texts (200)
+Generate emotion stories (12 emotions × 100 = 1200) and neutral dialogues (200)
 using the Claude API, then save them to data/stories/.
+
+Emotion stories: 100 topics → 50 sampled (seed=42) × 2 stories/topic × 12 emotions
+                 = 600 API requests
+Neutral texts  : 20 topics × 5 dialogues/topic × 2 batches = 200 dialogues
+                 = 40 API requests
 
 Usage:
     python scripts/01_generate_stories.py
@@ -12,8 +17,8 @@ Output:
     data/stories/neutral_texts.json     -- [{"topic": ..., "text": ...}, ...]
 
 Resume behavior:
-    Already-generated emotions/neutral texts are loaded from disk and skipped,
-    so the script is safe to re-run after interruption.
+    Already-completed emotions (>= TARGET_PER_EMOTION stories) are skipped.
+    Neutral texts are regenerated from scratch if not yet at 200.
 """
 
 import sys
@@ -21,12 +26,11 @@ import json
 import time
 from pathlib import Path
 
-# Allow running as `python scripts/01_generate_stories.py` from project root
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from emotion_probe.config import load_config, ANTHROPIC_API_KEY
-from emotion_probe.probe.story_generation import generate_emotion_stories
-from emotion_probe.probe.neutral_generation import generate_neutral_texts, NEUTRAL_TOPICS
+from emotion_probe.probe.story_generation import generate_emotion_stories, select_topics
+from emotion_probe.probe.neutral_generation import generate_neutral_texts
 
 # --------------------------------------------------------------------------- #
 # Paths
@@ -39,22 +43,25 @@ EMOTION_STORIES_PATH = STORIES_DIR / "emotion_stories.json"
 NEUTRAL_TEXTS_PATH = STORIES_DIR / "neutral_texts.json"
 
 # --------------------------------------------------------------------------- #
-# Guard: API key must be set
+# Config
 # --------------------------------------------------------------------------- #
 if not ANTHROPIC_API_KEY:
     print("ERROR: ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill in your key.")
     sys.exit(1)
 
-# --------------------------------------------------------------------------- #
-# Config
-# --------------------------------------------------------------------------- #
 cfg = load_config()
 EMOTIONS: list[str] = cfg["emotions"]
-N_PER_EMOTION: int = cfg["story_generation"]["stories_per_emotion"]
-N_NEUTRAL: int = cfg["neutral_generation"]["n_neutral_texts"]
-N_PER_TOPIC: int = N_NEUTRAL // len(NEUTRAL_TOPICS)  # 200 / 20 = 10
 
-INTER_EMOTION_PAUSE = 3.0   # seconds between emotion batches
+N_TOPICS = 50           # topics sampled per emotion
+N_PER_TOPIC = 2         # stories per topic per request
+TARGET_PER_EMOTION = N_TOPICS * N_PER_TOPIC   # 100
+
+N_NEUTRAL_TOPICS = 20
+N_NEUTRAL_PER_TOPIC = 5
+N_NEUTRAL_BATCHES = 2
+TARGET_NEUTRAL = N_NEUTRAL_TOPICS * N_NEUTRAL_PER_TOPIC * N_NEUTRAL_BATCHES  # 200
+
+INTER_EMOTION_PAUSE = 3.0  # seconds between emotion batches
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -77,32 +84,35 @@ def save_json(path: Path, data):
 # --------------------------------------------------------------------------- #
 
 def main():
+    topics = select_topics(seed=42, n=N_TOPICS)
+
     # ---- Emotion stories -------------------------------------------------- #
     print("=" * 60)
-    print(f"Generating emotion stories: {len(EMOTIONS)} emotions × {N_PER_EMOTION} each")
+    print(f"Emotion stories: {len(EMOTIONS)} emotions × {TARGET_PER_EMOTION} each "
+          f"({N_TOPICS} topics × {N_PER_TOPIC} stories/topic)")
     print("=" * 60)
 
     emotion_stories: dict[str, list[str]] = load_json_or_default(EMOTION_STORIES_PATH, {})
 
     for idx, emotion in enumerate(EMOTIONS):
         existing = emotion_stories.get(emotion, [])
-        remaining = N_PER_EMOTION - len(existing)
 
-        if remaining <= 0:
-            print(f"[{idx+1}/{len(EMOTIONS)}] '{emotion}': already complete ({len(existing)} stories), skipping")
+        if len(existing) >= TARGET_PER_EMOTION:
+            print(f"[{idx+1}/{len(EMOTIONS)}] '{emotion}': already complete "
+                  f"({len(existing)} stories), skipping")
             continue
 
-        print(f"\n[{idx+1}/{len(EMOTIONS)}] '{emotion}': generating {remaining} stories "
-              f"(already have {len(existing)})")
+        print(f"\n[{idx+1}/{len(EMOTIONS)}] '{emotion}': generating "
+              f"{TARGET_PER_EMOTION} stories across {N_TOPICS} topics ...")
 
         new_stories = generate_emotion_stories(
             emotion=emotion,
-            n=remaining,
+            topics=topics,
+            n_stories_per_topic=N_PER_TOPIC,
             inter_request_delay=0.3,
         )
-        emotion_stories[emotion] = existing + new_stories
+        emotion_stories[emotion] = new_stories
 
-        # Save after each emotion so progress is not lost on interruption
         save_json(EMOTION_STORIES_PATH, emotion_stories)
         print(f"  Saved. Total for '{emotion}': {len(emotion_stories[emotion])}")
 
@@ -115,68 +125,25 @@ def main():
 
     # ---- Neutral texts ---------------------------------------------------- #
     print("\n" + "=" * 60)
-    print(f"Generating neutral texts: {len(NEUTRAL_TOPICS)} topics × {N_PER_TOPIC} each = {N_NEUTRAL}")
+    print(f"Neutral dialogues: {N_NEUTRAL_TOPICS} topics × {N_NEUTRAL_PER_TOPIC} "
+          f"× {N_NEUTRAL_BATCHES} batches = {TARGET_NEUTRAL}")
     print("=" * 60)
 
     neutral_texts: list[dict] = load_json_or_default(NEUTRAL_TEXTS_PATH, [])
 
-    already_done_topics: set[str] = set()
-    topic_counts: dict[str, int] = {}
-    for entry in neutral_texts:
-        topic_counts[entry["topic"]] = topic_counts.get(entry["topic"], 0) + 1
-    for topic, count in topic_counts.items():
-        if count >= N_PER_TOPIC:
-            already_done_topics.add(topic)
-
-    topics_to_generate = [t for t in NEUTRAL_TOPICS if t not in already_done_topics]
-
-    if not topics_to_generate:
-        print("Neutral texts already complete, skipping.")
+    if len(neutral_texts) >= TARGET_NEUTRAL:
+        print(f"Neutral texts already complete ({len(neutral_texts)}), skipping.")
     else:
-        print(f"Topics to generate: {len(topics_to_generate)} "
-              f"(skipping {len(already_done_topics)} already done)")
-
-        # Re-run only for missing topics
-        import importlib
-        import emotion_probe.probe.neutral_generation as ng_mod
-        from emotion_probe.probe.neutral_generation import (
-            NEUTRAL_TEXT_PROMPT, NEUTRAL_TOPICS as ALL_TOPICS
+        print(f"Generating {TARGET_NEUTRAL} neutral dialogues "
+              f"(currently have {len(neutral_texts)})...")
+        new_neutral = generate_neutral_texts(
+            n_stories_per_topic=N_NEUTRAL_PER_TOPIC,
+            n_batches=N_NEUTRAL_BATCHES,
+            inter_request_delay=0.3,
         )
-        import anthropic as _anthropic
-        from emotion_probe.config import ANTHROPIC_API_KEY as _key
-
-        client = _anthropic.Anthropic(api_key=_key)
-
-        for t_idx, topic in enumerate(topics_to_generate):
-            prompt = NEUTRAL_TEXT_PROMPT.format(topic=topic)
-            print(f"\n[{t_idx+1}/{len(topics_to_generate)}] topic: '{topic[:50]}'")
-            for i in range(N_PER_TOPIC):
-                for attempt in range(3):
-                    try:
-                        response = client.messages.create(
-                            model="claude-sonnet-4-6",
-                            max_tokens=400,
-                            messages=[{"role": "user", "content": prompt}],
-                        )
-                        text = response.content[0].text.strip()
-                        neutral_texts.append({"topic": topic, "text": text})
-                        break
-                    except _anthropic.RateLimitError:
-                        wait = 2.0 * (2 ** attempt)
-                        print(f"  Rate limit, waiting {wait:.0f}s...")
-                        time.sleep(wait)
-                    except Exception as e:
-                        print(f"  Error #{i+1} attempt {attempt+1}: {e}")
-                        time.sleep(2.0)
-                else:
-                    print(f"  WARNING: Failed neutral text for topic '{topic}' #{i+1}")
-
-                time.sleep(0.3)
-
-            save_json(NEUTRAL_TEXTS_PATH, neutral_texts)
-            print(f"  Saved. Running total: {len(neutral_texts)}")
-
-    print(f"\nNeutral texts complete: {len(neutral_texts)} total")
+        neutral_texts = new_neutral
+        save_json(NEUTRAL_TEXTS_PATH, neutral_texts)
+        print(f"  Saved. Total: {len(neutral_texts)}")
 
     # ---- Final summary ---------------------------------------------------- #
     print("\n" + "=" * 60)
