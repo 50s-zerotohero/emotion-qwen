@@ -65,6 +65,7 @@ async def respond(message: str, history: list, mode_str: str):
     token_records   = []
     response_html   = ""
     bars_html       = render_emotion_bars({})
+    baseline_scores: dict[str, float] | None = None   # first-token scores as baseline
 
     async for token_data in _backend.generate_with_emotions(
         user_message=message,
@@ -72,18 +73,31 @@ async def respond(message: str, history: list, mode_str: str):
         emotion_vectors=_emotion_vectors,
         max_new_tokens=max_new_tokens,
     ):
-        token_records.append(token_data)
+        raw_scores = token_data["emotions"]
+
+        # Establish baseline from first token; subsequent tokens show delta
+        if baseline_scores is None:
+            baseline_scores = raw_scores
+            display_scores  = {e: 0.0 for e in raw_scores}
+        else:
+            display_scores  = {e: raw_scores[e] - baseline_scores[e] for e in raw_scores}
+
+        # Store delta scores in the record (used by heatmap)
+        delta_record = dict(token_data)
+        delta_record["emotions"] = display_scores
+        token_records.append(delta_record)
+
         response_html += color_token(token_data["token"], token_data["section"])
-        bars_html      = render_emotion_bars(token_data["emotions"])
+        bars_html      = render_emotion_bars(display_scores)
 
         # Update the last assistant message in place (streaming)
         history[-1] = {"role": "assistant", "content": response_html}
 
         yield history, bars_html, gr.update()  # leave heatmap unchanged during streaming
 
-    # Generation complete → render heatmap
+    # Generation complete → render heatmap (delta scores)
     heatmap = render_heatmap(token_records)
-    yield history, bars_html, heatmap  # gr.Plot accepts plotly Figure directly
+    yield history, bars_html, gr.update(value=heatmap)
 
 
 # --------------------------------------------------------------------------- #
@@ -106,11 +120,16 @@ def build_app() -> gr.Blocks:
         )
 
         with gr.Row():
+            msg_box = gr.Textbox(
+                placeholder="Type a message and press Enter or click Send…",
+                label="Message",
+                scale=4,
+                lines=1,
+            )
+            send_btn = gr.Button("Send", variant="primary", scale=1)
+
+        with gr.Row():
             with gr.Column(scale=3):
-                # Primary: gr.Chatbot with HTML rendering
-                # Fallback: replace with gr.HTML if Chatbot strips inline styles.
-                #   bars_display = gr.HTML(label="Chat", elem_id="chat_display")
-                #   and accumulate full HTML manually in respond().
                 # Gradio 6.x: messages format only, sanitize_html=False to allow spans
                 # Fallback: if color spans are still stripped, replace this block with:
                 #   chat_display = gr.HTML(elem_id="chat_display", label="Response")
@@ -128,24 +147,11 @@ def build_app() -> gr.Blocks:
                     value=render_emotion_bars({}),
                 )
 
-        with gr.Row():
-            msg_box = gr.Textbox(
-                placeholder="Type a message and press Enter or click Send…",
-                label="Message",
-                scale=4,
-                lines=1,
-            )
-            send_btn = gr.Button("Send", variant="primary", scale=1)
-
         heatmap_display = gr.Plot(label="Token-level Emotion Heatmap")
 
         # ---- Wire up events ---- #
-        def clear_heatmap_on_input(msg, history):
-            """Reset heatmap when user starts typing a new message."""
-            return gr.update(value=None)
-
-        msg_box.change(clear_heatmap_on_input, inputs=[msg_box, chatbot], outputs=[heatmap_display])
-
+        # Note: do NOT clear heatmap on msg_box.change — the .then() that clears
+        # msg_box after submission would trigger it and erase the just-rendered heatmap.
         send_kwargs = dict(
             fn=respond,
             inputs=[msg_box, chatbot, mode_radio],
@@ -166,3 +172,7 @@ def launch(share: bool = False, server_port: int = 7860):
     app = build_app()
     app.queue()
     app.launch(share=share, server_port=server_port)
+
+
+if __name__ == "__main__":
+    launch()

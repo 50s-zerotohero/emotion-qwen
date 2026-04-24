@@ -112,7 +112,7 @@ def render_heatmap(token_records: list[TokenWithEmotions]) -> go.Figure:
         fig.add_vline(x=idx - 0.5, line_color="black", line_width=1.5, line_dash="dot")
 
     fig.update_layout(
-        title="Token-level Emotion Activation",
+        title="Token-level Emotion Activation (Δ from baseline)",
         xaxis=dict(tickangle=45, tickfont=dict(size=9)),
         yaxis=dict(tickfont=dict(size=11)),
         height=380,
