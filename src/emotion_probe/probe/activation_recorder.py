@@ -41,47 +41,77 @@ def _get_model_and_tokenizer(cfg: dict):
     return _lm, _tokenizer
 
 
+def wrap_as_assistant(text: str, tokenizer) -> tuple[str, int]:
+    """Wrap story/neutral text as an assistant reply in ChatML format.
+
+    This aligns the activation distribution with inference time (chat UI),
+    where the model generates text as an assistant response.
+
+    Returns:
+        (wrapped_text, header_token_count) where header_token_count is the
+        number of tokens in the ChatML header before the actual text begins.
+    """
+    messages = [{"role": "user", "content": "Write a short passage."}]
+    header = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,  # includes <|im_start|>assistant\n
+    )
+    header_token_count = len(tokenizer(header, return_tensors="pt").input_ids[0])
+    return header + text, header_token_count
+
+
 def record_activations(
     texts: list[str],
     cfg: dict,
 ) -> np.ndarray:
     """Run texts through the model and return mean residual stream vectors.
 
+    Each text is wrapped as an assistant reply (ChatML format) to match the
+    inference-time distribution. The mean is taken over positions
+    [header_tokens + skip_first_n_tokens : end] to skip both the ChatML
+    header and the first N content tokens (per paper: emotion content becomes
+    clear after token 50).
+
     Args:
-        texts: list of plain text strings (no ChatML wrapper)
+        texts: list of plain text strings (ChatML wrapping applied here)
         cfg: loaded config dict
 
     Returns:
-        activations: shape (len(texts), hidden_dim) in float32
-                     Texts with fewer than skip_first_n_tokens are skipped
-                     and replaced with np.nan rows.
+        activations: shape (len(texts), hidden_dim) in float32.
+                     Texts with fewer usable tokens are replaced with nan rows.
     """
     lm, tokenizer = _get_model_and_tokenizer(cfg)
     layer_idx: int = cfg["extraction"]["layer"]
     skip_n: int = cfg["extraction"]["skip_first_n_tokens"]
 
+    # Pre-compute header token count once (same for all texts)
+    _, header_n = wrap_as_assistant("", tokenizer)
+
     results = []
     for text in texts:
-        enc = tokenizer(text, return_tensors="pt")
+        chat_text, _ = wrap_as_assistant(text, tokenizer)
+        enc = tokenizer(chat_text, return_tensors="pt")
         input_ids = enc["input_ids"]
         seq_len = input_ids.shape[1]
 
-        if seq_len <= skip_n:
-            print(f"  WARN: seq_len={seq_len} <= skip_n={skip_n}, skipping")
-            # placeholder — caller can filter nan rows
+        # Skip header tokens + first skip_n content tokens
+        skip_total = header_n + skip_n
+
+        if seq_len <= skip_total:
+            print(f"  WARN: seq_len={seq_len} <= skip_total={skip_total} "
+                  f"(header={header_n} + content_skip={skip_n}), skipping")
             results.append(np.full(2560, np.nan, dtype=np.float32))
             continue
 
         with lm.trace(input_ids.to("cuda"), remote=False):
             hidden_save = lm.model.layers[layer_idx].output[0].save()
 
-        # nnsight 0.6.x local: .save() returns torch.Tensor directly
         hidden = hidden_save if isinstance(hidden_save, torch.Tensor) else hidden_save.value
-        # hidden shape: (seq_len, hidden_dim)
-        vec = hidden[skip_n:, :].detach().float().cpu().mean(dim=0).numpy()  # (hidden_dim,)
+        # Average over positions after header + first skip_n content tokens
+        vec = hidden[skip_total:, :].detach().float().cpu().mean(dim=0).numpy()
         results.append(vec)
 
-        # Free GPU memory eagerly
         del hidden_save, hidden
         torch.cuda.empty_cache()
 
@@ -110,7 +140,6 @@ def record_emotion_activations(cfg: dict, force: bool = False) -> None:
         print(f"  '{emotion}': recording {len(stories)} stories...")
         acts = record_activations(stories, cfg)
 
-        # Filter nan rows (texts that were too short)
         valid_mask = ~np.isnan(acts).any(axis=1)
         if not valid_mask.all():
             print(f"    WARNING: {(~valid_mask).sum()} stories skipped (too short)")
