@@ -47,7 +47,7 @@ Anthropicの論文 "Emotion Concepts and their Function in a Large Language Mode
 | UI | Gradio (gr.Blocks) |
 | 可視化 | Plotly (heatmap) + HTML/CSS bars |
 | パッケージ管理 | uv or pip + requirements.txt |
-| Python | 3.11 |
+| Python | 3.12 |
 
 ## アーキテクチャ
 
@@ -294,7 +294,14 @@ Topic: {topic}"""
 - [ ] `scripts/03_extract_vectors.py`: 上記をバッチ実行
 
 **重要な設計判断**:
-- 抽出時のプロンプトは **平文のストーリー/中立テキストのみ** (ChatMLラッパーなし、モード非依存)
+- 抽出時のプロンプトは **ChatML形式でアシスタント応答としてラップ** して推論時と同じ分布に揃える:
+  ```
+  <|im_start|>user
+  Write a short passage.<|im_end|>
+  <|im_start|>assistant
+  {story_text}
+  ```
+  `skip_first_n_tokens` はヘッダーのトークン数(約13)を加算して、ストーリー本文の50トークン目以降を平均する。
 - ノイズ除去は **最初から有効** (config.yaml: `noise_removal.enabled: true`)
 - 生ベクトル (射影除去前) も保存し、比較可能にする
 
@@ -397,8 +404,8 @@ def project_out(
 ### 前提
 - OS: Linux (Ubuntu 22.04/24.04推奨) or WSL2
 - GPU: NVIDIA RTX 5090 (32GB VRAM)
-- CUDA: 12.4以上
-- Python: 3.11
+- CUDA: 12.8以上 (RTX 5090は12.8+が必要)
+- Python: 3.12
 
 ### APIキーとトークンの準備
 
@@ -435,7 +442,7 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 
 pip install --upgrade pip
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 pip install transformers accelerate nnsight
 pip install anthropic
 pip install gradio plotly pandas numpy scikit-learn
