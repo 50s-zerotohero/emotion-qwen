@@ -42,36 +42,38 @@ def _build_input_ids(
     """Build tokenized input_ids with appropriate assistant prefix for each mode."""
     messages = [{"role": "user", "content": user_message}]
 
-    # apply_chat_template adds <|im_start|>...<|im_end|> formatting
-    enc = tokenizer.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,  # appends <|im_start|>assistant\n
-        return_tensors="pt",
-    )
-    # apply_chat_template returns BatchEncoding or Tensor depending on version
-    base = enc["input_ids"] if hasattr(enc, "__getitem__") and not isinstance(enc, torch.Tensor) else enc
-    # ensure shape (1, seq_len)
-    if base.ndim == 1:
-        base = base.unsqueeze(0)
+    def _enc_to_tensor(enc) -> torch.Tensor:
+        """Normalize apply_chat_template output to (1, seq_len) tensor."""
+        t = enc["input_ids"] if hasattr(enc, "__getitem__") and not isinstance(enc, torch.Tensor) else enc
+        return t.unsqueeze(0) if t.ndim == 1 else t
 
     if mode == ReasoningMode.NO_THINK:
-        # Force model to skip thinking by pre-filling empty think block
-        prefix = tokenizer.encode("<think></think>\n", add_special_tokens=False)
-        prefix_t = torch.tensor([prefix], dtype=torch.long)
-        return torch.cat([base, prefix_t], dim=1)
+        # enable_thinking=False makes the template inject <think>\n\n</think>\n\n
+        # as the assistant prefix, so the model skips the thinking phase entirely.
+        enc = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True,
+            return_tensors="pt", enable_thinking=False,
+        )
+        return _enc_to_tensor(enc)
 
     elif mode == ReasoningMode.THINK:
-        # Let model generate <think> naturally — no prefix
-        return base
+        # Standard Qwen3 template: model generates <think>...</think> naturally.
+        enc = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True,
+            return_tensors="pt",
+        )
+        return _enc_to_tensor(enc)
 
     elif mode == ReasoningMode.SCRATCHPAD:
-        # Empty think + open scratchpad block for model to fill
-        prefix = tokenizer.encode(
-            "<think></think>\n<SCRATCHPAD_REASONING>\n",
-            add_special_tokens=False,
+        # Inject <think></think> (via enable_thinking=False) then open scratchpad.
+        base = _enc_to_tensor(tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True,
+            return_tensors="pt", enable_thinking=False,
+        ))
+        scratchpad_prefix = tokenizer.encode(
+            "<SCRATCHPAD_REASONING>\n", add_special_tokens=False,
         )
-        prefix_t = torch.tensor([prefix], dtype=torch.long)
+        prefix_t = torch.tensor([scratchpad_prefix], dtype=torch.long)
         return torch.cat([base, prefix_t], dim=1)
 
     raise ValueError(f"Unknown mode: {mode}")
@@ -117,8 +119,11 @@ class LocalNNSightBackend(EmotionProbeBackend):
         emotion_vectors: dict[str, torch.Tensor],
         max_new_tokens: int = 512,
     ) -> AsyncIterator[TokenWithEmotions]:
-        # Move emotion vectors to CPU float32 once
-        ev_cpu = {e: v.float().cpu() for e, v in emotion_vectors.items()}
+        # Normalize emotion vectors to unit length → cosine similarity probe.
+        ev_cpu = {
+            e: (v / v.norm().clamp(min=1e-8)).float().cpu()
+            for e, v in emotion_vectors.items()
+        }
 
         # Load model lazily
         await asyncio.to_thread(self._ensure_loaded)
@@ -158,7 +163,9 @@ class LocalNNSightBackend(EmotionProbeBackend):
                 token_str = tokenizer.decode([next_id])
 
                 # --- compute emotion scores from last-position hidden state ---
-                vec = hidden[-1, :].detach().float().cpu()  # (hidden_dim,)
+                # Normalize hidden state → cosine similarity against each probe vector.
+                vec = hidden[-1, :].detach().float().cpu()
+                vec = vec / vec.norm().clamp(min=1e-8)
                 scores = {e: float(torch.dot(vec, ev)) for e, ev in ev_cpu.items()}
 
                 # --- section tracking ---
