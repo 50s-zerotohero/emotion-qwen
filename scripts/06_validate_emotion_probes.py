@@ -1,10 +1,12 @@
 """
 Script: 06_validate_emotion_probes.py
 
-Generates three validation figures:
+Generates validation figures:
   Fig 1 — 12×12 cosine similarity heatmap (hierarchically clustered)
   Fig 2 — PCA vs. human valence/arousal ratings (Russell & Mehrabian 1977)
   Fig 3 — Scenario × emotion cosine similarity heatmap (requires GPU)
+  Fig 4A — 2D PCA scatter of emotion vectors
+  Fig 4B — 3D interactive Plotly scatter (HTML)
 
 Usage:
     python scripts/06_validate_emotion_probes.py          # all figures
@@ -14,6 +16,8 @@ Output:
     data/figures/fig1_cosine_similarity.png
     data/figures/fig2_pca_correlation.png
     data/figures/fig3_scenario_heatmap.png
+    data/figures/fig4a_pca_2d.png
+    data/figures/fig4b_pca_3d.html
 """
 
 import sys
@@ -241,40 +245,58 @@ def figure1_cosine_heatmap():
 # --------------------------------------------------------------------------- #
 def figure2_pca_correlation():
     print("Generating Figure 2: PCA vs. human ratings...")
-    pca = PCA(n_components=2)
-    coords = pca.fit_transform(V)  # (12, 2)
+    pca = PCA(n_components=5)
+    projected = pca.fit_transform(V)  # (12, 5)
 
     valence = np.array([HUMAN_RATINGS[e][0] for e in EMOTIONS])
     arousal = np.array([HUMAN_RATINGS[e][1] for e in EMOTIONS])
-    pc1 = coords[:, 0]
-    pc2 = coords[:, 1]
 
-    # Flip PCs to maximize correlation magnitude (sign is arbitrary in PCA)
-    r1, _ = pearsonr(pc1, valence)
-    if r1 < 0:
-        pc1 = -pc1
-    r2, _ = pearsonr(pc2, arousal)
-    if r2 < 0:
-        pc2 = -pc2
+    # Report PC1–PC5 correlations with both axes
+    print("  PC vs valence/arousal correlations:")
+    for pc_idx in range(5):
+        r_val, p_val = pearsonr(projected[:, pc_idx], valence)
+        r_aro, p_aro = pearsonr(projected[:, pc_idx], arousal)
+        var = pca.explained_variance_ratio_[pc_idx] * 100
+        print(f"  PC{pc_idx+1} ({var:.1f}% var): "
+              f"r_valence={r_val:+.3f} (p={p_val:.3f})  "
+              f"r_arousal={r_aro:+.3f} (p={p_aro:.3f})")
 
-    r1, p1 = pearsonr(pc1, valence)
-    r2, p2 = pearsonr(pc2, arousal)
+    # Select best PC for each axis by highest |r|
+    r_vals = [pearsonr(projected[:, i], valence)[0] for i in range(5)]
+    r_aros = [pearsonr(projected[:, i], arousal)[0] for i in range(5)]
+    best_val_idx = int(np.argmax(np.abs(r_vals)))
+    best_aro_idx = int(np.argmax(np.abs(r_aros)))
+    print(f"  → Best for valence: PC{best_val_idx+1} (r={r_vals[best_val_idx]:+.3f})")
+    print(f"  → Best for arousal: PC{best_aro_idx+1} (r={r_aros[best_aro_idx]:+.3f})")
 
-    var1 = pca.explained_variance_ratio_[0] * 100
-    var2 = pca.explained_variance_ratio_[1] * 100
+    # Build plot axes: PC1 vs valence, best arousal PC vs arousal
+    pc_val = projected[:, best_val_idx].copy()
+    pc_aro = projected[:, best_aro_idx].copy()
+
+    # Flip sign so positive PC = positive human rating
+    if r_vals[best_val_idx] < 0:
+        pc_val = -pc_val
+    if r_aros[best_aro_idx] < 0:
+        pc_aro = -pc_aro
+
+    r1, p1 = pearsonr(pc_val, valence)
+    r2, p2 = pearsonr(pc_aro, arousal)
+    var_val = pca.explained_variance_ratio_[best_val_idx] * 100
+    var_aro = pca.explained_variance_ratio_[best_aro_idx] * 100
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    for ax, (x, y, xlabel, ylabel, r, p, var) in zip(axes, [
-        (pc1, valence, f"PC1 ({var1:.1f}% var)", "Valence (human)", r1, p1, var1),
-        (pc2, arousal, f"PC2 ({var2:.1f}% var)", "Arousal (human)", r2, p2, var2),
+    for ax, (x, y, xlabel, ylabel, r, p) in zip(axes, [
+        (pc_val, valence,
+         f"PC{best_val_idx+1} ({var_val:.1f}% var)", "Valence (human)", r1, p1),
+        (pc_aro, arousal,
+         f"PC{best_aro_idx+1} ({var_aro:.1f}% var)", "Arousal (human)", r2, p2),
     ]):
         for i, emo in enumerate(EMOTIONS):
             ax.scatter(x[i], y[i], color=EMOTION_COLORS[emo], s=80, zorder=3)
             ax.annotate(emo, (x[i], y[i]), textcoords="offset points",
                         xytext=(6, 4), fontsize=9)
 
-        # Regression line
         m, b = np.polyfit(x, y, 1)
         xs = np.linspace(x.min(), x.max(), 100)
         ax.plot(xs, m * xs + b, "k--", alpha=0.5, lw=1)
@@ -288,15 +310,13 @@ def figure2_pca_correlation():
         ax.set_title(f"r = {r:.3f}  {p_str}", fontsize=12)
         ax.grid(True, alpha=0.2)
 
-    fig.suptitle("Emotion Vectors: PCA vs. Human Valence/Arousal Ratings\n"
+    fig.suptitle("Emotion Vectors: Best PC vs. Human Valence/Arousal Ratings\n"
                  "(Russell & Mehrabian 1977)", fontsize=13)
     fig.tight_layout()
     out = FIGURES_DIR / "fig2_pca_correlation.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {out}")
-    print(f"  PC1 vs valence:  r={r1:.3f}, p={p1:.3f}")
-    print(f"  PC2 vs arousal:  r={r2:.3f}, p={p2:.3f}")
 
 
 # --------------------------------------------------------------------------- #
@@ -329,10 +349,21 @@ def figure3_scenario_heatmap(cfg: dict):
     Vn_t = torch.tensor(Vn).float()
     sim = (acts_n @ Vn_t.T).numpy()  # (n_scenarios, 12)
 
+    # Row-wise 99th-percentile normalization (paper-compliant)
+    sim_norm = sim.copy()
+    for i in range(sim_norm.shape[0]):
+        row = sim_norm[i, :]
+        valid = row[~np.isnan(row)]
+        if len(valid) > 0:
+            p99 = np.percentile(np.abs(valid), 99)
+            if p99 > 0:
+                sim_norm[i, :] = row / p99
+
     fig, ax = plt.subplots(figsize=(10, 7))
-    vmax = np.nanmax(np.abs(sim))
-    im = ax.imshow(sim, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
-    plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04, label="Cosine similarity")
+    vmax = np.nanmax(np.abs(sim_norm))
+    im = ax.imshow(sim_norm, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+    plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04,
+                 label="Cosine similarity (99th-pct normalized per scenario)")
 
     ax.set_xticks(range(12))
     ax.set_yticks(range(len(scenario_names)))
@@ -341,18 +372,132 @@ def figure3_scenario_heatmap(cfg: dict):
 
     for i in range(len(scenario_names)):
         for j in range(12):
-            val = sim[i, j]
+            val = sim_norm[i, j]
             if not np.isnan(val):
                 color = "white" if abs(val) > vmax * 0.6 else "black"
                 ax.text(j, i, f"{val:.2f}", ha="center", va="center",
                         fontsize=7.5, color=color)
 
     ax.set_title("Scenario × Emotion Cosine Similarity\n"
-                 "(Qwen3-4B layer 20, ChatML-aligned)", fontsize=13, pad=12)
+                 "(Qwen3-4B layer 20, ChatML-aligned, row 99th-pct normalized)",
+                 fontsize=13, pad=12)
     fig.tight_layout()
     out = FIGURES_DIR / "fig3_scenario_heatmap.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    print(f"  Saved → {out}")
+
+
+# --------------------------------------------------------------------------- #
+# Figure 4A — 2D PCA scatter of emotion vectors
+# --------------------------------------------------------------------------- #
+_POSITIVE_EMOTIONS = {"happy", "loving", "proud", "inspired", "calm"}
+_NEGATIVE_EMOTIONS = {"desperate", "sad", "afraid", "nervous", "angry", "guilty"}
+
+
+def _valence_color(emo: str) -> str:
+    if emo in _POSITIVE_EMOTIONS:
+        return "#c0392b"   # red family
+    if emo in _NEGATIVE_EMOTIONS:
+        return "#2980b9"   # blue family
+    return "#7f8c8d"       # gray (surprised)
+
+
+def figure4a_pca_2d():
+    print("Generating Figure 4A: 2D PCA scatter of emotion vectors...")
+    pca2 = PCA(n_components=2)
+    proj2 = pca2.fit_transform(Vn)  # (12, 2)
+
+    var1 = pca2.explained_variance_ratio_[0] * 100
+    var2 = pca2.explained_variance_ratio_[1] * 100
+
+    fig, ax = plt.subplots(figsize=(9, 8))
+
+    for i, emo in enumerate(EMOTIONS):
+        c = _valence_color(emo)
+        ax.scatter(proj2[i, 0], proj2[i, 1], color=c, s=120, zorder=3)
+        ax.annotate(emo, (proj2[i, 0], proj2[i, 1]),
+                    textcoords="offset points", xytext=(7, 4), fontsize=10)
+
+    # Grand mean is mean of data = PCA center → projects to (0, 0)
+    ax.scatter(0, 0, marker="x", color="black", s=120, linewidths=2,
+               zorder=4, label="grand mean")
+
+    ax.axhline(0, color="grey", lw=0.5, ls=":")
+    ax.axvline(0, color="grey", lw=0.5, ls=":")
+    ax.set_xlabel(f"PC1 ({var1:.1f}% var)", fontsize=12)
+    ax.set_ylabel(f"PC2 ({var2:.1f}% var)", fontsize=12)
+    ax.set_title("Emotion Vectors — 2D PCA\n"
+                 "Red = positive valence · Blue = negative valence",
+                 fontsize=13, pad=12)
+
+    # Legend patches
+    import matplotlib.patches as mpatches
+    ax.legend(handles=[
+        mpatches.Patch(color="#c0392b", label="positive valence"),
+        mpatches.Patch(color="#2980b9", label="negative valence"),
+        mpatches.Patch(color="#7f8c8d", label="neutral (surprised)"),
+        plt.Line2D([0], [0], marker="x", color="black", lw=0, markersize=10,
+                   markeredgewidth=2, label="grand mean"),
+    ], fontsize=9, loc="best")
+
+    ax.grid(True, alpha=0.2)
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig4a_pca_2d.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved → {out}")
+
+
+# --------------------------------------------------------------------------- #
+# Figure 4B — 3D interactive Plotly scatter (HTML)
+# --------------------------------------------------------------------------- #
+def figure4b_pca_3d():
+    print("Generating Figure 4B: 3D Plotly scatter of emotion vectors...")
+    import plotly.graph_objects as go
+
+    pca3 = PCA(n_components=3)
+    proj3 = pca3.fit_transform(Vn)  # (12, 3)
+
+    var1 = pca3.explained_variance_ratio_[0] * 100
+    var2 = pca3.explained_variance_ratio_[1] * 100
+    var3 = pca3.explained_variance_ratio_[2] * 100
+
+    colors  = [_valence_color(e) for e in EMOTIONS]
+
+    fig = go.Figure()
+
+    # Emotion points
+    fig.add_trace(go.Scatter3d(
+        x=proj3[:, 0], y=proj3[:, 1], z=proj3[:, 2],
+        mode="markers+text",
+        text=EMOTIONS,
+        textposition="top center",
+        marker=dict(size=8, color=colors, opacity=0.85),
+        name="emotions",
+    ))
+
+    # Grand mean at PCA center (0, 0, 0)
+    fig.add_trace(go.Scatter3d(
+        x=[0], y=[0], z=[0],
+        mode="markers",
+        marker=dict(size=10, color="black", symbol="cross"),
+        name="grand mean",
+    ))
+
+    fig.update_layout(
+        title="Emotion Vectors — 3D PCA (rotate & zoom)",
+        scene=dict(
+            xaxis_title=f"PC1 ({var1:.1f}%)",
+            yaxis_title=f"PC2 ({var2:.1f}%)",
+            zaxis_title=f"PC3 ({var3:.1f}%)",
+        ),
+        width=900, height=750,
+        legend=dict(x=0.02, y=0.98),
+    )
+
+    out = FIGURES_DIR / "fig4b_pca_3d.html"
+    fig.write_html(str(out))
     print(f"  Saved → {out}")
 
 
@@ -373,6 +518,9 @@ def main():
         figure3_scenario_heatmap(cfg)
     else:
         print("Skipping Figure 3 (--no-gpu flag set)")
+
+    figure4a_pca_2d()
+    figure4b_pca_3d()
 
     print("\nAll figures saved to data/figures/")
 
