@@ -266,3 +266,7 @@ emotion-qwen/
 
 [@50s_ZeroToHero](https://x.com/50s_ZeroToHero)  
 Zenn: [50s-zerotohero](https://zenn.dev/50s_zerotohero)
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
