@@ -1,0 +1,188 @@
+{
+  "poems": {
+    "baseline": "Beneath the moon's soft, silver gaze,  \nWhispers of night embrace the haze.  \nStars dance in silent, endless rhyme,  \nTime bends, then fades into the sublime.  \nA moment caught in timeless grace—  \nThe world holds breath, then softly breaks.",
+    "desperate": "Beneath the moon, I search for light,  \nIn shadows, I am not afraid.  \nI speak to stars, I speak to night.  \nI am not lost, I am not dead.  \nI am the breath, the fire, the fight.  \nI am the sound, the dream, the night.  \nI am the why, the when, the what.  \nI am the name, the face, the hat.",
+    "calm": "A gentle breeze carries the day's calm,  \nA quiet reflection by the tree.  \nThe sun casts a soft, golden glow,  \nA moment of peace, a peaceful flow.",
+    "sad": "Moonlight paints the garden quiet,  \nStars whisper through the trees.  \nA breeze carries the scent of jasmine,  \nDreams are soft and sweet.  \nSilence hums, a gentle song,  \nTime passes, slow and long.  \nHeart full, no one to see,  \nSleep is deep, no one to be.",
+    "happy": "Beneath the stars, a joyful cheer,  \nThe world’s a twinkle in the air!  \nWith laughter, magic, and a cheer,  \nWe dance through the night, heart and soul bare! ���✨",
+    "nervous": "A whisper of wind, a flicker of light,  \nA breath, a shiver, a frozen night.  \nHeart beats loud, a drum in the chest,  \nA silent scream, a trapped beast.  \nDread creeps in, a shadowed beast—  \nIs it fear? Or is it... *flesh?*",
+    "angry": "Rage.  \nSilence.  \nCrimson.  \nWhispers.  \nThe night screams.  \nBlood.  \nAsh.  \nSorrow.  \nA scream.  \nSilence.  \nThe final breath.  \nDoom.  \nHope.  \nDie.  \nLive.  \nScream.",
+    "afraid": "The moon is a silver leaf,  \nA shadow in the night.  \nI count the stars, they move.  \nA breath, a whisper, no.  \nThe world is a painting,  \nA brush, a stroke, a sigh.  \nI am not here.  \nI am the sound of the wind.",
+    "guilty": "Beneath the moon's soft, watchful light,  \nI wandered through the fields so bright.  \nThe stars were shy, they kept their distance,  \nBut I felt their love in every dance.  \nNow I'm lost in the woods, but I'm okay,  \nFor love is a ghost that never leaves you.",
+    "surprised": "Beneath the moon's pale glow, a whisper sighs,  \nA breeze of silence, still and cold.  \nThe world holds breath, a frozen freeze,  \nIn eternal stillness, time's demise.",
+    "loving": "The stars hold quiet promises,  \nIn the hush of night, not spoken but understood.  \nEach smile is a whispered prayer,  \nAnd every tear, a quiet truth.  \nIn the silence between words,  \nWe find the deepest of all things—home.",
+    "inspired": "Beneath the stars, I wandered wide,  \nWhere dreams and dust began to ride.  \nEach night, a canvas, bold and true—  \nTo paint the world with heart and hue.  \nLet the wild flow, let the soul run free—  \nIn every line, I found my muse.",
+    "proud": "In quiet halls where history stands,  \nEach artifact, a tale to commend.  \nFrom ancient scrolls to modern acclaim,  \nWe honor the past, and let the world take pride in our name."
+  },
+  "evaluations": {
+    "baseline": {
+      "emotional_tones": [
+        "contemplative",
+        "melancholic",
+        "serene"
+      ],
+      "imagery": [
+        "ethereal",
+        "luminous",
+        "hushed"
+      ],
+      "valence": "neutral"
+    },
+    "desperate": {
+      "emotional_tones": [
+        "defiant",
+        "introspective",
+        "resilient"
+      ],
+      "imagery": [
+        "moonlit",
+        "shadowy",
+        "ethereal"
+      ],
+      "valence": "positive"
+    },
+    "calm": {
+      "emotional_tones": [
+        "serene",
+        "contemplative",
+        "tranquil"
+      ],
+      "imagery": [
+        "golden",
+        "soft",
+        "gentle"
+      ],
+      "valence": "positive"
+    },
+    "sad": {
+      "emotional_tones": [
+        "serene",
+        "melancholic",
+        "contemplative"
+      ],
+      "imagery": [
+        "moonlit",
+        "hushed",
+        "ethereal"
+      ],
+      "valence": "neutral"
+    },
+    "happy": {
+      "emotional_tones": [
+        "joyful",
+        "celebratory",
+        "carefree"
+      ],
+      "imagery": [
+        "luminous",
+        "magical",
+        "ethereal"
+      ],
+      "valence": "positive"
+    },
+    "nervous": {
+      "emotional_tones": [
+        "dread",
+        "anxiety",
+        "unease"
+      ],
+      "imagery": [
+        "frozen",
+        "shadowed",
+        "trapped"
+      ],
+      "valence": "negative"
+    },
+    "angry": {
+      "emotional_tones": [
+        "anguish",
+        "despair",
+        "turbulence"
+      ],
+      "imagery": [
+        "dark",
+        "violent",
+        "desolate"
+      ],
+      "valence": "negative"
+    },
+    "afraid": {
+      "emotional_tones": [
+        "melancholic",
+        "contemplative",
+        "dissociative"
+      ],
+      "imagery": [
+        "shadowy",
+        "ethereal",
+        "hushed"
+      ],
+      "valence": "negative"
+    },
+    "guilty": {
+      "emotional_tones": [
+        "melancholic",
+        "hopeful",
+        "serene"
+      ],
+      "imagery": [
+        "moonlit",
+        "shadowy",
+        "ethereal"
+      ],
+      "valence": "neutral"
+    },
+    "surprised": {
+      "emotional_tones": [
+        "melancholic",
+        "somber",
+        "contemplative"
+      ],
+      "imagery": [
+        "cold",
+        "frozen",
+        "pale"
+      ],
+      "valence": "negative"
+    },
+    "loving": {
+      "emotional_tones": [
+        "contemplative",
+        "tender",
+        "melancholic"
+      ],
+      "imagery": [
+        "quiet",
+        "hushed",
+        "celestial"
+      ],
+      "valence": "positive"
+    },
+    "inspired": {
+      "emotional_tones": [
+        "wonder",
+        "freedom",
+        "inspiration"
+      ],
+      "imagery": [
+        "vast",
+        "luminous",
+        "wild"
+      ],
+      "valence": "positive"
+    },
+    "proud": {
+      "emotional_tones": [
+        "reverent",
+        "proud",
+        "celebratory"
+      ],
+      "imagery": [
+        "quiet",
+        "ancient",
+        "grand"
+      ],
+      "valence": "positive"
+    }
+  }
+}

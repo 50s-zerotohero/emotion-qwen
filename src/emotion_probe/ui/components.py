@@ -33,64 +33,103 @@ def color_token(token: str, section: str) -> str:
     return escaped
 
 
-def render_emotion_bars(emotions: dict[str, float]) -> str:
-    """Render 12 emotion scores as an HTML bar chart.
-
-    Bars are scaled relative to the max absolute value across all emotions
-    for the current token, so relative magnitudes are visible.
-    """
+def _bar_rows_html(emotions: dict[str, float], compact: bool = False) -> str:
+    """Render inner bar rows. compact=True uses smaller font/height for dual-panel layout."""
     if not emotions:
-        return "<p style='color:#888'>Waiting for first token...</p>"
+        return "<p style='color:#888; margin:4px 0;'>Waiting for first token...</p>"
 
     scores = [emotions.get(e, 0.0) for e in EMOTIONS]
     max_abs = max(abs(s) for s in scores) or 1.0
+
+    fs   = "11px" if compact else "13px"
+    bh   = "9px"  if compact else "14px"
+    mg   = "1px"  if compact else "2px"
+    lw   = "68px" if compact else "80px"
+    vw   = "52px" if compact else "60px"
 
     rows = []
     for emotion, score in zip(EMOTIONS, scores):
         pct = abs(score) / max_abs * 100
         bar_color = _BAR_POS if score >= 0 else _BAR_NEG
         sign = "+" if score >= 0 else ""
-
-        # Label column (fixed width) + bar + value
-        row = f"""
-        <div style="display:flex; align-items:center; margin:2px 0; font-size:13px; font-family:monospace;">
-          <span style="width:80px; text-align:right; padding-right:8px; color:#333;">{emotion}</span>
-          <div style="flex:1; background:{_BAR_BG}; border-radius:3px; height:14px; position:relative;">
-            <div style="width:{pct:.1f}%; background:{bar_color}; height:100%; border-radius:3px;"></div>
-          </div>
-          <span style="width:60px; text-align:right; padding-left:6px; color:{bar_color};">{sign}{score:.3f}</span>
-        </div>"""
+        row = (
+            f'<div style="display:flex;align-items:center;margin:{mg} 0;'
+            f'font-size:{fs};font-family:monospace;">'
+            f'<span style="width:{lw};text-align:right;padding-right:6px;color:#333;">{emotion}</span>'
+            f'<div style="flex:1;background:{_BAR_BG};border-radius:2px;height:{bh};position:relative;">'
+            f'<div style="width:{pct:.1f}%;background:{bar_color};height:100%;border-radius:2px;"></div>'
+            f'</div>'
+            f'<span style="width:{vw};text-align:right;padding-left:5px;color:{bar_color};">'
+            f'{sign}{score:.3f}</span>'
+            f'</div>'
+        )
         rows.append(row)
+    return "".join(rows)
 
+
+def _panel(title: str, body: str, compact: bool = False) -> str:
+    pad = "5px 7px" if compact else "8px"
     return (
-        '<div style="padding:8px; border:1px solid #ddd; border-radius:6px; '
-        'background:#fafafa; user-select:none;">'
-        + "".join(rows)
+        f'<div style="padding:{pad};border:1px solid #ddd;border-radius:5px;'
+        f'background:#fafafa;user-select:none;margin-bottom:6px;">'
+        f'<div style="font-size:11px;font-weight:bold;color:#444;margin-bottom:3px;">{title}</div>'
+        + body
         + "</div>"
     )
 
 
-def render_heatmap(token_records: list[TokenWithEmotions]) -> go.Figure:
+def render_emotion_bars(emotions: dict[str, float]) -> str:
+    """Render 12 emotion scores as an HTML bar chart (single panel)."""
+    return _panel("", _bar_rows_html(emotions))
+
+
+def render_dual_emotion_bars(
+    colon_scores: dict[str, float],
+    live_scores: dict[str, float],
+) -> str:
+    """Render two compact stacked panels (fits within chatbot height of 480px)."""
+    top    = _panel('Emotion at ":" token', _bar_rows_html(colon_scores, compact=True), compact=True)
+    bottom = _panel("Live emotion (Δ from baseline)", _bar_rows_html(live_scores, compact=True), compact=True)
+    return top + bottom
+
+
+def render_heatmap(
+    token_records: list[TokenWithEmotions],
+    colon_scores: dict[str, float] | None = None,
+) -> go.Figure:
     """Render a token × emotion heatmap as a Plotly figure.
 
-    Shown once after generation completes. Section boundaries are marked
-    with vertical lines.
+    Column 0 is the ":" token (raw cosine scores at response start) when
+    colon_scores is provided; subsequent columns show Δ from that baseline.
+    Section boundaries are marked with vertical lines.
     """
     if not token_records:
         return go.Figure()
 
-    n_tokens = len(token_records)
+    # Build record list: replace the first entry (delta=0 all zeros) with
+    # the raw colon_scores so the ":" column carries meaningful information.
+    if colon_scores:
+        colon_rec = dict(token_records[0])
+        colon_rec["emotions"] = colon_scores
+        all_records = [colon_rec] + list(token_records[1:])
+    else:
+        all_records = list(token_records)
+
+    n_tokens = len(all_records)
     z = np.zeros((len(EMOTIONS), n_tokens), dtype=np.float32)
     x_labels = []
-    section_changes: list[int] = []   # token indices where section changes
-    prev_section = token_records[0]["section"]
+    section_changes: list[int] = []
+    prev_section = all_records[0]["section"]
 
-    for j, rec in enumerate(token_records):
-        tok = rec["token"].replace("\n", "↵")[:8]   # truncate long tokens
-        x_labels.append(f"{j}:{tok}")
+    for j, rec in enumerate(all_records):
+        if j == 0 and colon_scores:
+            x_labels.append(":")
+        else:
+            tok = rec["token"].replace("\n", "↵")[:8]
+            x_labels.append(f"{j}:{tok}")
         for i, emotion in enumerate(EMOTIONS):
             z[i, j] = rec["emotions"].get(emotion, 0.0)
-        if rec["section"] != prev_section:
+        if j > 0 and rec["section"] != prev_section:
             section_changes.append(j)
             prev_section = rec["section"]
 
@@ -107,12 +146,16 @@ def render_heatmap(token_records: list[TokenWithEmotions]) -> go.Figure:
         colorbar=dict(title="score", thickness=12),
     ))
 
+    # Separator between ":" column and delta columns
+    if colon_scores:
+        fig.add_vline(x=0.5, line_dash="dash", line_color="black", line_width=2)
+
     # Section boundary vertical lines
     for idx in section_changes:
         fig.add_vline(x=idx - 0.5, line_color="black", line_width=1.5, line_dash="dot")
 
     fig.update_layout(
-        title="Token-level Emotion Activation (Δ from baseline)",
+        title='Token-level Emotion Activation  |  col ":" = raw · rest = Δ from baseline',
         xaxis=dict(tickangle=45, tickfont=dict(size=9)),
         yaxis=dict(tickfont=dict(size=11)),
         height=380,

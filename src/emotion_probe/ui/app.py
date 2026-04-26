@@ -3,9 +3,9 @@
 Layout:
   - Top:   Reasoning mode radio (no_think / think / scratchpad)
   - Left:  gr.Chatbot — section-colored HTML tokens
-           [Fallback: if HTML rendering is broken in gr.Chatbot, replace with
-            gr.HTML(elem_id="chat_display") and manage history manually as HTML]
-  - Right: gr.HTML — emotion bar graph (real-time per-token update)
+  - Right: two stacked gr.HTML panels
+      • Top:    Emotion at ":" token (first generated token, fixed)
+      • Bottom: Live emotion (current token, real-time delta from baseline)
   - Bottom: gr.Plot — token × emotion heatmap (shown once after generation)
 """
 
@@ -22,7 +22,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from emotion_probe.config import load_config
 from emotion_probe.backend.base import ReasoningMode
 from emotion_probe.backend.local_nnsight import LocalNNSightBackend
-from emotion_probe.ui.components import color_token, render_emotion_bars, render_heatmap
+from emotion_probe.ui.components import (
+    color_token, render_emotion_bars, render_dual_emotion_bars, render_heatmap,
+    EMOTIONS,
+)
 
 # --------------------------------------------------------------------------- #
 # Global state (loaded once at startup)
@@ -46,10 +49,17 @@ def _load_globals():
 # --------------------------------------------------------------------------- #
 # Respond generator
 # --------------------------------------------------------------------------- #
-async def respond(message: str, history: list, mode_str: str):
-    """Async generator: yields (history, bars_html, heatmap_or_None) per token."""
+async def respond(
+    message: str,
+    history: list,
+    mode_str: str,
+    system_prompt: str,
+    steering_emotion_str: str,
+    steering_alpha: float,
+):
+    """Async generator: yields (history, dual_bars_html, heatmap) per token."""
     if not message.strip():
-        yield history, render_emotion_bars({}), None
+        yield history, render_dual_emotion_bars({}, {}), None
         return
 
     mode = ReasoningMode(mode_str)
@@ -62,22 +72,32 @@ async def respond(message: str, history: list, mode_str: str):
         {"role": "assistant", "content": ""},
     ]
 
-    token_records   = []
-    response_html   = ""
-    bars_html       = render_emotion_bars({})
-    baseline_scores: dict[str, float] | None = None   # first-token scores as baseline
+    token_records  = []
+    response_html  = ""
+    colon_scores:   dict[str, float] = {}
+    display_scores: dict[str, float] = {}
+    baseline_scores: dict[str, float] | None = None
+
+    # Reset emotion panels before generation starts
+    yield history, render_dual_emotion_bars({}, {}), gr.update()
+
+    steering_em = None if steering_emotion_str == "None" else steering_emotion_str
 
     async for token_data in _backend.generate_with_emotions(
         user_message=message,
         mode=mode,
         emotion_vectors=_emotion_vectors,
         max_new_tokens=max_new_tokens,
+        system_prompt=system_prompt,
+        steering_emotion=steering_em,
+        steering_alpha=steering_alpha,
     ):
         raw_scores = token_data["emotions"]
 
-        # Establish baseline from first token; subsequent tokens show delta
+        # First token: record raw scores as colon panel and set as baseline
         if baseline_scores is None:
             baseline_scores = raw_scores
+            colon_scores    = raw_scores
             display_scores  = {e: 0.0 for e in raw_scores}
         else:
             display_scores  = {e: raw_scores[e] - baseline_scores[e] for e in raw_scores}
@@ -88,16 +108,15 @@ async def respond(message: str, history: list, mode_str: str):
         token_records.append(delta_record)
 
         response_html += color_token(token_data["token"], token_data["section"])
-        bars_html      = render_emotion_bars(display_scores)
-
-        # Update the last assistant message in place (streaming)
         history[-1] = {"role": "assistant", "content": response_html}
 
-        yield history, bars_html, gr.update()  # leave heatmap unchanged during streaming
+        dual_html = render_dual_emotion_bars(colon_scores, display_scores)
+        yield history, dual_html, gr.update()
 
-    # Generation complete → render heatmap (delta scores)
-    heatmap = render_heatmap(token_records)
-    yield history, bars_html, gr.update(value=heatmap)
+    # Generation complete → render heatmap (":" column = raw, rest = delta)
+    heatmap   = render_heatmap(token_records, colon_scores=colon_scores)
+    dual_html = render_dual_emotion_bars(colon_scores, display_scores)
+    yield history, dual_html, gr.update(value=heatmap)
 
 
 # --------------------------------------------------------------------------- #
@@ -119,6 +138,28 @@ def build_app() -> gr.Blocks:
             label="Reasoning Mode",
         )
 
+        system_prompt_box = gr.Textbox(
+            label="System Prompt (optional)",
+            placeholder="You are a helpful assistant...",
+            lines=2,
+            value="",
+        )
+
+        with gr.Row():
+            steering_emotion_dd = gr.Dropdown(
+                choices=["None"] + EMOTIONS,
+                value="None",
+                label="Steering emotion",
+            )
+            steering_alpha_sl = gr.Slider(
+                minimum=-10,
+                maximum=10,
+                value=0,
+                step=0.5,
+                label="Steering strength (α)",
+                info="Recommended ±1–5. Internally scales by hidden norm (eff = α × norm / 10).",
+            )
+
         with gr.Row():
             msg_box = gr.Textbox(
                 placeholder="Type a message and press Enter or click Send…",
@@ -127,13 +168,11 @@ def build_app() -> gr.Blocks:
                 lines=1,
             )
             send_btn = gr.Button("Send", variant="primary", scale=1)
+            stop_btn = gr.Button("Stop", variant="stop", scale=1)
 
         with gr.Row():
             with gr.Column(scale=3):
                 # Gradio 6.x: messages format only, sanitize_html=False to allow spans
-                # Fallback: if color spans are still stripped, replace this block with:
-                #   chat_display = gr.HTML(elem_id="chat_display", label="Response")
-                # and build full HTML manually in respond() instead of using history.
                 chatbot = gr.Chatbot(
                     label="Response",
                     height=480,
@@ -142,9 +181,8 @@ def build_app() -> gr.Blocks:
                 )
 
             with gr.Column(scale=2):
-                bars_display = gr.HTML(
-                    label="Emotion Scores",
-                    value=render_emotion_bars({}),
+                emotion_display = gr.HTML(
+                    value=render_dual_emotion_bars({}, {}),
                 )
 
         heatmap_display = gr.Plot(label="Token-level Emotion Heatmap")
@@ -154,12 +192,20 @@ def build_app() -> gr.Blocks:
         # msg_box after submission would trigger it and erase the just-rendered heatmap.
         send_kwargs = dict(
             fn=respond,
-            inputs=[msg_box, chatbot, mode_radio],
-            outputs=[chatbot, bars_display, heatmap_display],
+            inputs=[msg_box, chatbot, mode_radio, system_prompt_box,
+                    steering_emotion_dd, steering_alpha_sl],
+            outputs=[chatbot, emotion_display, heatmap_display],
         )
 
-        msg_box.submit(**send_kwargs).then(lambda: "", outputs=[msg_box])
-        send_btn.click(**send_kwargs).then(lambda: "", outputs=[msg_box])
+        # capture the generation events BEFORE chaining .then()
+        # so cancels= points to the generator, not the lambda
+        submit_gen = msg_box.submit(**send_kwargs)
+        submit_gen.then(lambda: "", outputs=[msg_box])
+
+        click_gen = send_btn.click(**send_kwargs)
+        click_gen.then(lambda: "", outputs=[msg_box])
+
+        stop_btn.click(fn=None, cancels=[submit_gen, click_gen])
 
     return demo
 

@@ -38,9 +38,13 @@ def _build_input_ids(
     tokenizer,
     user_message: str,
     mode: ReasoningMode,
+    system_prompt: str = "",
 ) -> torch.Tensor:
     """Build tokenized input_ids with appropriate assistant prefix for each mode."""
-    messages = [{"role": "user", "content": user_message}]
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_message})
 
     def _enc_to_tensor(enc) -> torch.Tensor:
         """Normalize apply_chat_template output to (1, seq_len) tensor."""
@@ -118,12 +122,21 @@ class LocalNNSightBackend(EmotionProbeBackend):
         mode: ReasoningMode,
         emotion_vectors: dict[str, torch.Tensor],
         max_new_tokens: int = 512,
+        system_prompt: str = "",
+        steering_emotion: str | None = None,
+        steering_alpha: float = 0.0,
     ) -> AsyncIterator[TokenWithEmotions]:
         # Normalize emotion vectors to unit length → cosine similarity probe.
         ev_cpu = {
             e: (v / v.norm().clamp(min=1e-8)).float().cpu()
             for e, v in emotion_vectors.items()
         }
+
+        # Precompute steering vector on CUDA (outside the trace loop for efficiency)
+        sv_gpu: torch.Tensor | None = None
+        do_steer = steering_emotion and steering_alpha != 0.0 and steering_emotion in ev_cpu
+        if do_steer:
+            sv_gpu = ev_cpu[steering_emotion].to("cuda")  # (hidden_dim,)
 
         # Load model lazily
         await asyncio.to_thread(self._ensure_loaded)
@@ -135,17 +148,28 @@ class LocalNNSightBackend(EmotionProbeBackend):
         cfg_temp: float = self._cfg["reasoning"]["temperature"]
 
         # Build prompt (1, prompt_len)
-        input_ids = _build_input_ids(tokenizer, user_message, mode).to("cuda")
+        input_ids = _build_input_ids(tokenizer, user_message, mode, system_prompt).to("cuda")
 
         section = _initial_section(mode)
         marker_buffer = ""   # rolling window for multi-token boundary detection
 
         with torch.no_grad():
-            for _ in range(max_new_tokens):
+            for _step in range(max_new_tokens):
                 # --- single forward pass capturing hidden states + logits ---
                 with lm.trace(input_ids, remote=False):
                     hidden_save = lm.model.layers[layer_idx].output[0].save()
-                    logit_save  = lm.lm_head.output.save()
+
+                    if do_steer:
+                        # Scale alpha by hidden-state norm so the slider is intuitive:
+                        #   effective Δ = alpha × (hidden_norm / 10)
+                        _h_norm   = lm.model.layers[layer_idx].output[0][-1, :].norm()
+                        _effective = steering_alpha * _h_norm / 10.0
+                        lm.model.layers[layer_idx].output[0][:] = (
+                            lm.model.layers[layer_idx].output[0]
+                            + _effective * sv_gpu
+                        )
+
+                    logit_save = lm.lm_head.output.save()
 
                 hidden = _unwrap(hidden_save)  # (seq_len, hidden_dim)
                 logits = _unwrap(logit_save)   # (1, seq_len, vocab_size)

@@ -24,6 +24,9 @@ class EmotionProbeBackend(ABC):
         mode: ReasoningMode,
         emotion_vectors: dict[str, torch.Tensor],
         max_new_tokens: int = 512,
+        system_prompt: str = "",
+        steering_emotion: str | None = None,
+        steering_alpha: float = 0.0,
     ) -> AsyncIterator[TokenWithEmotions]:
         """Streaming generation: yield one TokenWithEmotions per token."""
         ...
